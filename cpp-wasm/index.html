@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Premature Optimization Triangle - C++ WASM</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 20px;
+            color: #9b87b5;
+        }
+
+        #container {
+            display: none;
+            gap: 30px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        #container.loaded {
+            display: flex;
+        }
+
+        #canvas-container {
+            flex-shrink: 0;
+        }
+
+        canvas {
+            border: 2px solid #444;
+            border-radius: 8px;
+            cursor: move;
+            background: #2a2a2a;
+            display: block;
+        }
+
+        #sidebar {
+            min-width: 320px;
+            max-width: 400px;
+            flex: 1;
+        }
+
+        h2 {
+            margin-top: 0;
+            color: #9b87b5;
+            font-size: 24px;
+        }
+
+        h3 {
+            margin-top: 0;
+            color: #b0b0b0;
+            font-size: 18px;
+        }
+
+        .metric {
+            margin-bottom: 20px;
+        }
+
+        .metric-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-weight: 600;
+            font-size: 15px;
+        }
+
+        .bar-container {
+            width: 100%;
+            height: 10px;
+            background: #444;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        .bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #9b87b5, #c66b7b);
+            transition: width 0.15s ease-out;
+        }
+
+        .info-box {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #444;
+        }
+
+        .priority {
+            font-size: 36px;
+            font-weight: bold;
+            color: #c66b7b;
+            margin: 10px 0;
+            text-shadow: 0 0 10px rgba(198, 107, 123, 0.3);
+        }
+
+        .secondary-text {
+            color: #888;
+            font-size: 14px;
+        }
+
+        .quote {
+            font-style: italic;
+            color: #888;
+            font-size: 14px;
+            margin-top: 15px;
+            text-align: center;
+            padding: 10px;
+        }
+
+        .cs-concepts {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.8;
+        }
+
+        .cs-concepts li {
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">Loading C++ WASM module...</div>
+
+    <div id="container">
+        <div id="canvas-container">
+            <canvas id="canvas" width="700" height="550"></canvas>
+            <div class="quote">"Premature optimization is the root of all evil" - Donald Knuth</div>
+        </div>
+
+        <div id="sidebar">
+            <h2>Current Balance</h2>
+
+            <div class="metric">
+                <div class="metric-label">
+                    <span>Performance</span>
+                    <span id="perf-val">33%</span>
+                </div>
+                <div class="bar-container">
+                    <div class="bar-fill" id="perf-bar" style="width: 33%"></div>
+                </div>
+            </div>
+
+            <div class="metric">
+                <div class="metric-label">
+                    <span>Velocity</span>
+                    <span id="vel-val">33%</span>
+                </div>
+                <div class="bar-container">
+                    <div class="bar-fill" id="vel-bar" style="width: 33%"></div>
+                </div>
+            </div>
+
+            <div class="metric">
+                <div class="metric-label">
+                    <span>Adaptability</span>
+                    <span id="adapt-val">34%</span>
+                </div>
+                <div class="bar-container">
+                    <div class="bar-fill" id="adapt-bar" style="width: 34%"></div>
+                </div>
+            </div>
+
+            <div class="info-box">
+                <h3>Priority</h3>
+                <div class="priority" id="primary">Balanced</div>
+                <div class="secondary-text" id="secondary">All three concerns equally weighted</div>
+            </div>
+
+            <div class="info-box">
+                <h3>What This Means</h3>
+                <p id="description">You're balancing all three concerns equally. This is a safe middle ground.</p>
+            </div>
+
+            <div class="info-box">
+                <h3 style="color: #666;">CS Concepts Used</h3>
+                <ul class="cs-concepts">
+                    <li><strong>Structs:</strong> Point2D and BarycentricCoord</li>
+                    <li><strong>Classes:</strong> Triangle with encapsulation</li>
+                    <li><strong>RAII:</strong> init() and cleanup() for memory</li>
+                    <li><strong>Dynamic Memory:</strong> new/delete for allocation</li>
+                    <li><strong>Function Pointers:</strong> Event callbacks</li>
+                    <li><strong>Linear Algebra:</strong> Barycentric coordinates</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let canvas, ctx;
+        let cachedTriangle = null;
+        let cachedValues = { perf: 0.33, vel: 0.33, adapt: 0.34 };
+        let lastUpdateTime = 0;
+
+        // Configure Module BEFORE loading the WASM script
+        var Module = {
+            onRuntimeInitialized: function() {
+                console.log('C++ WASM Module loaded successfully!');
+
+                // Hide loading, show container
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('container').classList.add('loaded');
+
+                // Initialize C++ side
+                Module.ccall('init', null, [], []);
+
+                // Set up canvas
+                canvas = document.getElementById('canvas');
+                ctx = canvas.getContext('2d');
+
+                // Cache triangle vertices (they never change)
+                cachedTriangle = {
+                    topX: Module.ccall('getTriangleTopX', 'number', [], []),
+                    topY: Module.ccall('getTriangleTopY', 'number', [], []),
+                    leftX: Module.ccall('getTriangleLeftX', 'number', [], []),
+                    leftY: Module.ccall('getTriangleLeftY', 'number', [], []),
+                    rightX: Module.ccall('getTriangleRightX', 'number', [], []),
+                    rightY: Module.ccall('getTriangleRightY', 'number', [], [])
+                };
+
+                // Set up mouse events
+                canvas.addEventListener('mousedown', onMouseDown);
+                // Attach move and up to document so we don't lose tracking
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+
+                // Start rendering
+                requestAnimationFrame(renderLoop);
+            },
+            print: function(text) {
+                console.log('C++ stdout:', text);
+            },
+            printErr: function(text) {
+                console.error('C++ stderr:', text);
+            }
+        };
+
+        function renderLoop() {
+            draw();
+            requestAnimationFrame(renderLoop);
+        }
+
+        function getMousePos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            return {
+                x: (e.clientX - rect.left) * scaleX,
+                y: (e.clientY - rect.top) * scaleY
+            };
+        }
+
+        function onMouseDown(e) {
+            const pos = getMousePos(e);
+            Module.ccall('handleMouseDown', null, ['number', 'number'], [pos.x, pos.y]);
+            updateValues();
+            draw();
+            updateUI();
+        }
+
+        function onMouseMove(e) {
+            const pos = getMousePos(e);
+            Module.ccall('handleMouseMove', null, ['number', 'number'], [pos.x, pos.y]);
+
+            // Throttle UI updates to 60fps max
+            const now = performance.now();
+            if (now - lastUpdateTime > 16) {
+                updateValues();
+                updateUI();
+                lastUpdateTime = now;
+            }
+        }
+
+        function onMouseUp(e) {
+            Module.ccall('handleMouseUp', null, [], []);
+        }
+
+        function updateValues() {
+            cachedValues.perf = Module.ccall('getPerformance', 'number', [], []);
+            cachedValues.vel = Module.ccall('getVelocity', 'number', [], []);
+            cachedValues.adapt = Module.ccall('getAdaptability', 'number', [], []);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const tri = cachedTriangle;
+
+            // Draw triangle
+            ctx.strokeStyle = '#9b87b5';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(tri.topX, tri.topY);
+            ctx.lineTo(tri.leftX, tri.leftY);
+            ctx.lineTo(tri.rightX, tri.rightY);
+            ctx.closePath();
+            ctx.stroke();
+
+            // Draw labels
+            ctx.fillStyle = '#e0e0e0';
+            ctx.font = 'bold 20px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Performance', tri.topX, tri.topY - 20);
+            ctx.textAlign = 'left';
+            ctx.fillText('Velocity', tri.leftX - 80, tri.leftY + 10);
+            ctx.textAlign = 'right';
+            ctx.fillText('Adaptability', tri.rightX + 100, tri.rightY + 10);
+
+            // Get dot position from C++ (only call this once per frame)
+            const dotX = Module.ccall('getDotX', 'number', [], []);
+            const dotY = Module.ccall('getDotY', 'number', [], []);
+
+            // Draw dot with glow
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#c66b7b';
+            ctx.fillStyle = '#c66b7b';
+            ctx.beginPath();
+            ctx.arc(dotX, dotY, 12, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+
+        function updateUI() {
+            // Get values from C++
+            const performance = Module.ccall('getPerformance', 'number', [], []);
+            const velocity = Module.ccall('getVelocity', 'number', [], []);
+            const adaptability = Module.ccall('getAdaptability', 'number', [], []);
+
+            const p = Math.round(performance * 100);
+            const v = Math.round(velocity * 100);
+            const a = Math.round(adaptability * 100);
+
+            // Update displays
+            document.getElementById('perf-val').textContent = p + '%';
+            document.getElementById('vel-val').textContent = v + '%';
+            document.getElementById('adapt-val').textContent = a + '%';
+
+            document.getElementById('perf-bar').style.width = p + '%';
+            document.getElementById('vel-bar').style.width = v + '%';
+            document.getElementById('adapt-bar').style.width = a + '%';
+
+            // Determine priority
+            const values = [
+                { name: 'Performance', val: performance },
+                { name: 'Velocity', val: velocity },
+                { name: 'Adaptability', val: adaptability }
+            ];
+            values.sort((a, b) => b.val - a.val);
+
+            document.getElementById('primary').textContent = values[0].name;
+            document.getElementById('secondary').textContent =
+                `then ${values[1].name}, then ${values[2].name}`;
+
+            // Update description
+            const descriptions = {
+                'Performance-Velocity': "Optimizing for speed and efficiency. You're building for today's constraints.",
+                'Performance-Adaptability': "Balancing performance with future-proofing. You're building robust systems.",
+                'Velocity-Performance': "Shipping fast with optimization. You're moving quickly with purpose.",
+                'Velocity-Adaptability': "Prioritizing speed and flexibility. You're iterating rapidly.",
+                'Adaptability-Performance': "Building flexible, efficient systems. You're architecting for the long term.",
+                'Adaptability-Velocity': "Shipping flexible code quickly. You're staying agile."
+            };
+
+            let description = "You're balancing all three concerns equally.";
+
+            if (values[0].val > 0.4) {
+                const key = `${values[0].name}-${values[1].name}`;
+                description = descriptions[key] || description;
+            }
+
+            document.getElementById('description').textContent = description;
+        }
+    </script>
+
+    <!-- Load WASM module AFTER Module is configured -->
+    <script src="optimization_triangle.js"></script>
+</body>
+</html>

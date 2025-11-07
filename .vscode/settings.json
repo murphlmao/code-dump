@@ -1,0 +1,8 @@
+{
+  "files.associations": {
+    "*.gs": "javascript",
+    "*.py": "python",
+    "algorithm": "cpp",
+    "string": "cpp"
+  }
+}
