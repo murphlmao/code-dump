@@ -1,174 +1,177 @@
 #include <emscripten/emscripten.h>
-#include <emscripten/html5.h>
 #include <cmath>
 #include <algorithm>
 
-// Structs for coordinate representation
+// Optimized: Use simple structs without constructors for better performance
 struct Point2D {
-    double x;
-    double y;
-
-    Point2D() : x(0), y(0) {}
-    Point2D(double x, double y) : x(x), y(y) {}
+    double x, y;
 };
 
 struct BarycentricCoord {
     double performance;
     double velocity;
     double adaptability;
-
-    BarycentricCoord() : performance(0.33), velocity(0.33), adaptability(0.34) {}
-    BarycentricCoord(double p, double v, double a)
-        : performance(p), velocity(v), adaptability(a) {}
 };
 
-// Triangle class
-class Triangle {
-private:
-    Point2D top, left, right;
+// Optimized: Inline math functions for speed
+inline double distanceSq(double x1, double y1, double x2, double y2) {
+    double dx = x2 - x1;
+    double dy = y2 - y1;
+    return dx * dx + dy * dy;
+}
 
-public:
-    Triangle(int canvasWidth, int canvasHeight) {
-        const int padding = 80;
-        top = Point2D(canvasWidth / 2.0, padding);
-        left = Point2D(padding, canvasHeight - padding);
-        right = Point2D(canvasWidth - padding, canvasHeight - padding);
-    }
+inline double signedArea(double x1, double y1, double x2, double y2, double x3, double y3) {
+    return (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3);
+}
 
-    Point2D baryToCartesian(const BarycentricCoord& bc) const {
-        return Point2D(
-            bc.performance * top.x + bc.velocity * left.x + bc.adaptability * right.x,
-            bc.performance * top.y + bc.velocity * left.y + bc.adaptability * right.y
-        );
-    }
+// Optimized: Store triangle as simple doubles instead of Point2D objects
+static double topX, topY, leftX, leftY, rightX, rightY;
+static double invTotalArea; // Pre-calculate inverse for division optimization
 
-    // Calculate signed area of triangle
-    double signedArea(const Point2D& p1, const Point2D& p2, const Point2D& p3) const {
-        return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
-    }
-
-    bool isInside(const Point2D& point) const {
-        double d1 = signedArea(point, top, left);
-        double d2 = signedArea(point, left, right);
-        double d3 = signedArea(point, right, top);
-
-        bool hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-        bool hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-
-        return !(hasNeg && hasPos);
-    }
-
-    // Project a point onto a line segment
-    Point2D projectPointOntoSegment(const Point2D& p, const Point2D& a, const Point2D& b) const {
-        double dx = b.x - a.x;
-        double dy = b.y - a.y;
-        double lengthSq = dx * dx + dy * dy;
-
-        if (lengthSq < 0.001) return a;
-
-        // Calculate projection parameter t
-        double t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq;
-        t = std::max(0.0, std::min(1.0, t)); // Clamp to segment
-
-        return Point2D(a.x + t * dx, a.y + t * dy);
-    }
-
-    // Find closest point on triangle boundary
-    Point2D clampToTriangle(const Point2D& point) const {
-        if (isInside(point)) return point;
-
-        // Project onto each edge and find closest
-        Point2D proj1 = projectPointOntoSegment(point, top, left);
-        Point2D proj2 = projectPointOntoSegment(point, left, right);
-        Point2D proj3 = projectPointOntoSegment(point, right, top);
-
-        auto distSq = [](const Point2D& a, const Point2D& b) {
-            double dx = b.x - a.x;
-            double dy = b.y - a.y;
-            return dx * dx + dy * dy;
-        };
-
-        double d1 = distSq(point, proj1);
-        double d2 = distSq(point, proj2);
-        double d3 = distSq(point, proj3);
-
-        if (d1 <= d2 && d1 <= d3) return proj1;
-        if (d2 <= d3) return proj2;
-        return proj3;
-    }
-
-    BarycentricCoord cartesianToBary(const Point2D& point) const {
-        // Clamp point to triangle first
-        Point2D clamped = clampToTriangle(point);
-
-        double totalArea = signedArea(top, left, right);
-
-        if (std::abs(totalArea) < 0.001) totalArea = 1.0;
-
-        double perf = signedArea(clamped, left, right) / totalArea;   // performance (top)
-        double vel = signedArea(clamped, right, top) / totalArea;     // velocity (left)
-        double adapt = signedArea(clamped, top, left) / totalArea;    // adaptability (right)
-
-        return BarycentricCoord(
-            std::max(0.0, std::min(1.0, perf)),
-            std::max(0.0, std::min(1.0, vel)),
-            std::max(0.0, std::min(1.0, adapt))
-        );
-    }
-
-    Point2D getTop() const { return top; }
-    Point2D getLeft() const { return left; }
-    Point2D getRight() const { return right; }
-};
-
-// Global state
-static Triangle* triangle = nullptr;
-static BarycentricCoord dotPosition(0.33, 0.33, 0.34);
+// Dot position and state
+static BarycentricCoord dotPosition = {0.33, 0.33, 0.34};
 static bool isDragging = false;
-static const int CANVAS_WIDTH = 700;
-static const int CANVAS_HEIGHT = 550;
 
-// Exported functions for JavaScript
+// Cached dot cartesian position to avoid recalculation
+static double cachedDotX, cachedDotY;
+static bool dotPositionDirty = true;
+
+// Optimized: Inline barycentric to cartesian conversion
+inline void updateDotCartesian() {
+    if (dotPositionDirty) {
+        cachedDotX = dotPosition.performance * topX +
+                     dotPosition.velocity * leftX +
+                     dotPosition.adaptability * rightX;
+        cachedDotY = dotPosition.performance * topY +
+                     dotPosition.velocity * leftY +
+                     dotPosition.adaptability * rightY;
+        dotPositionDirty = false;
+    }
+}
+
+// Optimized: Fast point-in-triangle test
+inline bool isInsideTriangle(double px, double py) {
+    double d1 = signedArea(px, py, topX, topY, leftX, leftY);
+    double d2 = signedArea(px, py, leftX, leftY, rightX, rightY);
+    double d3 = signedArea(px, py, rightX, rightY, topX, topY);
+
+    bool hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+    bool hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+
+    return !(hasNeg && hasPos);
+}
+
+// Optimized: Project point onto line segment
+inline void projectOntoSegment(double px, double py,
+                               double ax, double ay, double bx, double by,
+                               double& outX, double& outY) {
+    double dx = bx - ax;
+    double dy = by - ay;
+    double lengthSq = dx * dx + dy * dy;
+
+    if (lengthSq < 0.001) {
+        outX = ax;
+        outY = ay;
+        return;
+    }
+
+    double t = ((px - ax) * dx + (py - ay) * dy) / lengthSq;
+    t = std::max(0.0, std::min(1.0, t));
+
+    outX = ax + t * dx;
+    outY = ay + t * dy;
+}
+
+// Optimized: Clamp to triangle boundary
+inline void clampToTriangle(double px, double py, double& outX, double& outY) {
+    if (isInsideTriangle(px, py)) {
+        outX = px;
+        outY = py;
+        return;
+    }
+
+    // Project onto all three edges
+    double proj1X, proj1Y, proj2X, proj2Y, proj3X, proj3Y;
+    projectOntoSegment(px, py, topX, topY, leftX, leftY, proj1X, proj1Y);
+    projectOntoSegment(px, py, leftX, leftY, rightX, rightY, proj2X, proj2Y);
+    projectOntoSegment(px, py, rightX, rightY, topX, topY, proj3X, proj3Y);
+
+    // Find closest projection
+    double d1 = distanceSq(px, py, proj1X, proj1Y);
+    double d2 = distanceSq(px, py, proj2X, proj2Y);
+    double d3 = distanceSq(px, py, proj3X, proj3Y);
+
+    if (d1 <= d2 && d1 <= d3) {
+        outX = proj1X;
+        outY = proj1Y;
+    } else if (d2 <= d3) {
+        outX = proj2X;
+        outY = proj2Y;
+    } else {
+        outX = proj3X;
+        outY = proj3Y;
+    }
+}
+
+// Optimized: Convert cartesian to barycentric
+inline void cartesianToBary(double px, double py, BarycentricCoord& result) {
+    // Clamp first
+    double clampedX, clampedY;
+    clampToTriangle(px, py, clampedX, clampedY);
+
+    // Calculate barycentric coordinates using pre-calculated inverse area
+    double perf = signedArea(clampedX, clampedY, leftX, leftY, rightX, rightY) * invTotalArea;
+    double vel = signedArea(clampedX, clampedY, rightX, rightY, topX, topY) * invTotalArea;
+    double adapt = signedArea(clampedX, clampedY, topX, topY, leftX, leftY) * invTotalArea;
+
+    result.performance = std::max(0.0, std::min(1.0, perf));
+    result.velocity = std::max(0.0, std::min(1.0, vel));
+    result.adaptability = std::max(0.0, std::min(1.0, adapt));
+}
+
 extern "C" {
     EMSCRIPTEN_KEEPALIVE
     void init() {
-        triangle = new Triangle(CANVAS_WIDTH, CANVAS_HEIGHT);
-    }
+        const int width = 700;
+        const int height = 550;
+        const int padding = 80;
 
-    EMSCRIPTEN_KEEPALIVE
-    void cleanup() {
-        delete triangle;
-        triangle = nullptr;
+        topX = width / 2.0;
+        topY = padding;
+        leftX = padding;
+        leftY = height - padding;
+        rightX = width - padding;
+        rightY = height - padding;
+
+        // Pre-calculate inverse of total area for optimization
+        double totalArea = signedArea(topX, topY, leftX, leftY, rightX, rightY);
+        invTotalArea = (std::abs(totalArea) < 0.001) ? 1.0 : (1.0 / totalArea);
+
+        dotPositionDirty = true;
     }
 
     EMSCRIPTEN_KEEPALIVE
     void handleMouseDown(double mouseX, double mouseY) {
-        if (!triangle) return;
+        updateDotCartesian();
 
-        Point2D mousePos(mouseX, mouseY);
-        Point2D dotPos = triangle->baryToCartesian(dotPosition);
+        double distSq = distanceSq(mouseX, mouseY, cachedDotX, cachedDotY);
 
-        double dx = mousePos.x - dotPos.x;
-        double dy = mousePos.y - dotPos.y;
-        double distance = std::sqrt(dx * dx + dy * dy);
-
-        // If clicking on the dot, start dragging
-        if (distance < 15) {
+        // If clicking on dot or inside triangle, start dragging
+        if (distSq < 225) { // 15^2 = 225
             isDragging = true;
-        }
-        // If clicking inside the triangle, move dot there and start dragging
-        else if (triangle->isInside(mousePos)) {
-            dotPosition = triangle->cartesianToBary(mousePos);
+        } else if (isInsideTriangle(mouseX, mouseY)) {
+            cartesianToBary(mouseX, mouseY, dotPosition);
+            dotPositionDirty = true;
             isDragging = true;
         }
     }
 
     EMSCRIPTEN_KEEPALIVE
     void handleMouseMove(double mouseX, double mouseY) {
-        if (!triangle || !isDragging) return;
+        if (!isDragging) return;
 
-        Point2D mousePos(mouseX, mouseY);
-        dotPosition = triangle->cartesianToBary(mousePos);
+        cartesianToBary(mouseX, mouseY, dotPosition);
+        dotPositionDirty = true;
     }
 
     EMSCRIPTEN_KEEPALIVE
@@ -178,35 +181,33 @@ extern "C" {
 
     EMSCRIPTEN_KEEPALIVE
     double getDotX() {
-        if (!triangle) return 0;
-        Point2D pos = triangle->baryToCartesian(dotPosition);
-        return pos.x;
+        updateDotCartesian();
+        return cachedDotX;
     }
 
     EMSCRIPTEN_KEEPALIVE
     double getDotY() {
-        if (!triangle) return 0;
-        Point2D pos = triangle->baryToCartesian(dotPosition);
-        return pos.y;
+        updateDotCartesian();
+        return cachedDotY;
     }
 
     EMSCRIPTEN_KEEPALIVE
-    double getTriangleTopX() { return triangle ? triangle->getTop().x : 0; }
+    double getTriangleTopX() { return topX; }
 
     EMSCRIPTEN_KEEPALIVE
-    double getTriangleTopY() { return triangle ? triangle->getTop().y : 0; }
+    double getTriangleTopY() { return topY; }
 
     EMSCRIPTEN_KEEPALIVE
-    double getTriangleLeftX() { return triangle ? triangle->getLeft().x : 0; }
+    double getTriangleLeftX() { return leftX; }
 
     EMSCRIPTEN_KEEPALIVE
-    double getTriangleLeftY() { return triangle ? triangle->getLeft().y : 0; }
+    double getTriangleLeftY() { return leftY; }
 
     EMSCRIPTEN_KEEPALIVE
-    double getTriangleRightX() { return triangle ? triangle->getRight().x : 0; }
+    double getTriangleRightX() { return rightX; }
 
     EMSCRIPTEN_KEEPALIVE
-    double getTriangleRightY() { return triangle ? triangle->getRight().y : 0; }
+    double getTriangleRightY() { return rightY; }
 
     EMSCRIPTEN_KEEPALIVE
     double getPerformance() { return dotPosition.performance; }
@@ -218,7 +219,4 @@ extern "C" {
     double getAdaptability() { return dotPosition.adaptability; }
 }
 
-/*
- * TO COMPILE:
- * emcc optimization_triangle.cpp -o optimization_triangle.js -s WASM=1 -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap"]' -s ALLOW_MEMORY_GROWTH=1
- */
+// emcc optimization_triangle.cpp -o optimization_triangle.js -O3 -s WASM=1 -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap"]' -s ALLOW_MEMORY_GROWTH=1
